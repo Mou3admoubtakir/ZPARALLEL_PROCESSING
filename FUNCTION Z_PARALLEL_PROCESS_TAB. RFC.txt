@@ -1,0 +1,96 @@
+FUNCTION Z_PARALLEL_PROCESS_TAB.
+*"----------------------------------------------------------------------
+*"*"Local Interface:
+*"  IMPORTING
+*"     VALUE(IT_MONITORING) TYPE  ZTTOTX_MONITORING
+*"     VALUE(IP_BEFORM) TYPE  CHAR1
+*"     VALUE(IP_POSTM) TYPE  CHAR1
+*"  EXPORTING
+*"     VALUE(ET_RESULT) TYPE  ZTTOTX_MONITORING
+*"----------------------------------------------------------------------
+DATA : lv_artime TYPE SAEABLZEIT.
+DATA : lv_rc TYPE i.
+DATA : lt_output type TABLE OF zotx_monitoring,
+       ls_doc TYPE zotx_monitoring,
+       ls_output TYPE zotx_monitoring,
+       gv_error TYPE i,
+       gv_succes TYPE i.
+
+  clear : lt_output, ls_doc, gv_error, gv_succes.
+
+  loop at IT_MONITORING into ls_doc.
+
+    clear ls_output.
+*    ls_output-source_tab = ls_doc-source_tab.
+    ls_output-MANDANT = ls_doc-MANDANT.
+    ls_output-sap_object = ls_doc-sap_object.
+    ls_output-object_id  = ls_doc-object_id.
+    ls_output-archiv_id    = ls_doc-archiv_id.
+    ls_output-arc_doc_id     = ls_doc-arc_doc_id.
+
+*    "Appel SCMS_HTTP_INFO
+*    call function 'SCMS_HTTP_INFO'
+*      exporting
+*        mandt         = sy-mandt
+*        crep_id       = ls_output-crep_id
+*        doc_id        = ls_output-doc_id
+*      importing
+*        status        = ls_output-status
+*        arch_date     = ls_output-arch_date
+*        arch_time     = ls_output-arch_time
+*        chng_date     = ls_output-chng_date
+*        chng_time     = ls_output-chng_time
+*        data_mimetype = ls_output-data_mimetype
+*      exceptions
+*        error_http    = 1
+*        error_rfc     = 2
+*        others        = 3.
+
+     call function 'ARCHIVOBJECT_STATUS'
+      exporting
+        archiv_doc_id            = ls_output-arc_doc_id
+        archiv_id                = ls_output-archiv_id
+      importing
+        archiv_object_status     = ls_output-status
+        ar_date                  = ls_output-AR_DATE
+        ar_time                  = lv_artime
+        document_type            = ls_output-AR_OBJECT
+      exceptions
+        error_archiv             = 1
+        error_communicationtable = 2
+        error_kernel             = 3
+        others                   = 4.
+
+    lv_rc = sy-subrc.
+
+    if lv_rc <> 0.
+      ls_output-status = 'ERROR'.
+      GV_ERROR = gv_error + 1.
+      case lv_rc.
+        when 1. ls_output-error_desc = 'SCMS_HTTP_INFO: ERROR_HTTP'.
+        when 2. ls_output-error_desc = 'SCMS_HTTP_INFO: ERROR_RFC'.
+        when others. ls_output-error_desc = 'SCMS_HTTP_INFO: OTHER_ERROR'.
+      endcase.
+      ELSE.
+        GV_succes = GV_succes + 1.
+    endif.
+
+       if  ls_output-ARCHIV_ID is INITIAL or ls_output-ARCHIV_ID is INITIAL.
+      CLEAR: ls_output-error_desc.
+      ls_output-error_desc = 'Content repository and document id are mandatory'.
+      ENDIF.
+
+    if ip_beform = 'X'.
+      ls_output-zstatus_premig = ls_output-status.
+      ELSEIF IP_POSTM = 'X'.
+        ls_output-zstatus_postmig = ls_output-status.
+      ENDIF.
+
+    append ls_output to lt_output.
+
+  endloop.
+
+  ET_RESULT[] = lt_output[].
+
+
+ENDFUNCTION.

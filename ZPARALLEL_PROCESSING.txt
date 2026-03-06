@@ -1,0 +1,752 @@
+*----------------------------------------------------------------------*
+* Project           : Opentext migration                              *
+* Process           :                                               *
+*----------------------------------------------------------------------*
+* Program       : ZOTX_MONITORING                                       *
+* Author        : Mouad MOUBTAKIR                                           *
+* Company       : Aerow                                           *
+* Creation Date : 02/03/2026
+* Transport     : D08K9D043J                                          *
+*----------------------------------------------------------------------*
+* Original program (opt.) : NA                                         *
+*----------------------------------------------------------------------*
+* Description   : Monitoring program for Sanofi migratio OpenText Aerow*
+*                                                          *
+*----------------------------------------------------------------------*
+* Validated by .............. :                           *
+* Validation date ........... :                              *
+*----------------------------------------------------------------------*
+REPORT ZOTX_MONITORING.
+TYPES: tt_docs   TYPE TABLE OF zotx_monitoring ,
+       tt_result1 TYPE TABLE OF zotx_monitoring.
+  DATA : gv_task TYPE i,
+         lv_counter TYPE i.
+  data lv_task type  /saptrx/to_guid.
+  data gs_monitoring_ind type zotx_monitoring.
+  data gt_monitoring_ind type table of zotx_monitoring.
+data: lv_start type i,
+      lv_end   type i,
+      lv_diff  type i,
+      gv_error TYPE i,
+      gv_succes TYPE i.
+
+get run time field lv_start.
+
+data ls_toa01 type toa01.
+data : lt_toaom type table of toaom.
+tables: toa01.
+
+*---------------------------------------------------------------------*
+* Types
+*---------------------------------------------------------------------*
+types: tt_toa01    type standard table of toa01 with empty key,
+       tt_toa02    type standard table of toa02 with empty key,
+       tt_toa03    type standard table of toa03 with empty key,
+       tt_toahr    type standard table of toahr with empty key,
+       tt_toaom    type standard table of toaom with empty key,
+       tt_srgbtbrel    type standard table of srgbtbrel with empty key,
+       tt_sdokloio type standard table of sdokloio with empty key,
+       tt_sdokphio type standard table of sdokphio with empty key,
+       tt_sdokphcl type standard table of sdokphcl with empty key.
+
+"Table normalisée (rassemblée)
+types: begin of ty_doc,
+          source_tab     TYPE char5,
+          sap_object      TYPE saeanwdid,        " SAP Object type
+         object_id       TYPE saeobjid,         " Business Object ID
+         archiv_id       TYPE saearchiv,        " Content Repository ID
+         arc_doc_id      TYPE saeardoid,        " Archive Document ID
+         ar_object       TYPE saeobjart,        " Document type
+         ar_date         TYPE saeabadate,       " Storage date
+         del_date        TYPE saedeldate,       " Expiry date
+         reserve         TYPE saereserve,       " Reserved
+         zstatus_premig  TYPE zmig_status,     " Status pre-migration
+         zstatus_postmig TYPE zmig_status,     " Status post-migration
+         error           TYPE zerror,           " Error (STRING)
+         error_desc      TYPE zerror_desc,      " Error description
+         migration_date  TYPE zmigration_date,  " Migration date
+       end of ty_doc.
+
+types tt_doc type standard table of ty_doc with empty key.
+
+data: lt_docs type TABLE OF ZOTX_MONITORING,
+      ls_doc  type ZOTX_MONITORING.
+data: lt_toa01 type tt_toa01,
+      lt_toa02 type tt_toa02,
+      lt_toa03 type tt_toa03,
+      lt_toahr type tt_toahr,
+      lt_srgbtbrel  type tt_srgbtbrel,
+*      lt_toaom  type tt_toaom,
+      lt_sdokloio  type tt_sdokloio,
+      lt_sdokphio  type tt_sdokphio,
+      lt_sdokphcl  type tt_sdokphcl.
+
+"Résultat final après SCMS_HTTP_INFO
+types: begin of ty_result,
+         source_tab    type char5,
+         sap_object    type toa01-sap_object,
+         object_id     type toa01-object_id,
+         crep_id       type toaar-archiv_id,"toa01-archiv_id,
+         doc_id        type sapb-sapadokid,"toa01-arc_doc_id,
+         status        type SAPB-SAPDOKSTAT,"char20,  "ONLINE/OFFLINE/ERROR...
+         status_befm        type SAPB-SAPDOKSTAT,"char20,  "ONLINE/OFFLINE/ERROR...
+         status_afm      type SAPB-SAPDOKSTAT,"char20,  "ONLINE/OFFLINE/ERROR...
+         arch_date     type saeabldate,"sy-datum,
+         arch_time     type SAPB-SAPABLZEIT,"sy-uzeit,
+         chng_date     type sy-datum,
+         chng_time     type sy-uzeit,
+         data_mimetype type char50,
+         rc            type sy-subrc,
+         err_text      type string,
+         doc_type      type saedocetyp,
+       end of ty_result.
+
+types tt_result type standard table of ty_result with empty key.
+
+data: lt_result type STANDARD TABLE OF zotx_monitoring,
+      ls_res    type zotx_monitoring.
+
+"Pour alimenter SDOK*
+types: tt_loio_id type standard table of sdokloio-loio_id with empty key,
+       tt_phio_id type standard table of sdokphio-phio_id with empty key.
+
+data: lt_loio_ids type tt_loio_id,
+      lt_phio_ids type tt_phio_id.
+
+selection-screen begin of block b1 with frame title text-b01.
+  parameters: p_test as checkbox default 'X',
+              p_bo   type c length 10.   "Business object
+  select-options: s_objid for ls_toa01-object_id no intervals.   "SAP object ID (example)
+selection-screen end of block b1.
+
+selection-screen begin of block b2 with frame title text-b02.
+  select-options: s_arid   for ls_toa01-archiv_id.                    "Archive (use your real domain)
+  select-options: s_docid  for ls_toa01-arc_doc_id.                    "Document ID (use your real domain)
+selection-screen end of block b2.
+
+selection-screen begin of block b3 with frame title text-b03.
+  select-options: s_archdt for sy-datum.                "Archiving date from .. to
+selection-screen end of block b3.
+
+selection-screen begin of block b4 with frame title text-b04.
+  parameters : p_beform radiobutton group g1 default 'X' user-command sel,
+               p_afterm radiobutton group g1.
+selection-screen end of block b4.
+
+*selection-screen begin of block b5 with frame title text-b05.
+*  parameters : p_checks radiobutton group g2 default 'X' user-command sel1,
+*               p_checkg radiobutton group g2.
+*selection-screen end of block b5.
+
+initialization.
+
+start-of-selection.
+
+
+*  if s_arid[] is initial.
+*    select * from toaom into table @lt_toaom.
+*  else.
+*    select * from toaom into table @lt_toaom
+*      where archiv_id in @s_arid.
+*  endif.
+
+  select * from toa01 into table @lt_toa01 "up to 1000 rows"up to 10 rows
+   where object_id   in @s_objid
+     and archiv_id   in @s_arid
+     and arc_doc_id  in @s_docid
+     and ar_date in @s_archdt.
+
+  select * from toa02 into table @lt_toa02 "up to 100 rows
+    where object_id   in @s_objid
+   and archiv_id   in @s_arid
+   and arc_doc_id  in @s_docid
+   and ar_date in @s_archdt.
+
+  select * from toa03 into table @lt_toa03 "up to 100 rows
+  where object_id   in @s_objid
+ and archiv_id   in @s_arid
+ and arc_doc_id  in @s_docid
+ and ar_date in @s_archdt.
+
+  select * from toahr into table @lt_toahr "up to 100 rows
+where object_id   in @s_objid
+and archiv_id   in @s_arid
+and arc_doc_id  in @s_docid
+and ar_date in @s_archdt.
+
+*    SELECT *
+*  FROM srgbtbrel
+*  INTO TABLE @lt_srgbtbrel up to 10 rows
+*  WHERE instid_a IN @s_objid.
+
+
+
+*  uline.
+*  write: / 'TOAOM   :', lines( lt_toaom ).
+*  write: / 'TOA01   :', lines( lt_toa01 ).
+*  write: / 'TOA02   :', lines( lt_toa02 ).
+*  write: / 'TOA03   :', lines( lt_toa03 ).
+*  write: / 'TOAHR   :', lines( lt_toahr ).
+*  write: / 'SRGBTBREL:', lines( lt_srgb ).
+*  write: / 'SDOKLOIO:', lines( lt_loio ).
+*  write: / 'SDOKPHIO:', lines( lt_phio ).
+*  write: / 'SDOKPHCL:', lines( lt_phcl ).
+*  uline.
+
+  "Regrouper tous les documents
+  perform gather_docs.
+
+  "Enlever les duplicatas
+  perform deduplicate_docs.
+
+  "Check status
+  perform check_online_status.
+
+  "Update table
+  PERFORM update_monitoring_table.
+
+  "Display in alv
+  perform display_sample.
+
+  get run time field lv_end.
+
+  lv_diff = lv_end - lv_start.
+
+  data(lv_seconds) = lv_diff / 1000000.
+
+  write :/ 'Execution time (seconds): ', lv_seconds.
+*&---------------------------------------------------------------------*
+*& Form gather_docs
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+form gather_docs .
+  clear lt_docs.
+
+*  LOOP at lt_toaom INTO DATA(ls_toaom)."No need because object_id is undeclared
+*   clear ls_doc.
+*    ls_doc-source_tab = 'TOAOM'.
+*    ls_doc-sap_object = ls_toaom-sap_object.
+**    ls_doc-object_id  = ls_toaom-object_id.
+*    ls_doc-AR_OBJECT = ls_toaom-SAP_OBJECT.
+*    ls_doc-archiv_id  = ls_toaom-archiv_id.
+*    append ls_doc to lt_docs.
+*    endloop.
+
+  loop at lt_toa01 into data(ls_a01).
+    clear ls_doc.
+*    ls_doc-source_tab = 'TOA01'.
+    ls_doc-MANDANT = sy-MANDT.
+    ls_doc-sap_object = ls_a01-sap_object.
+    ls_doc-object_id  = ls_a01-object_id.
+    ls_doc-archiv_id  = ls_a01-archiv_id.
+    ls_doc-arc_doc_id = ls_a01-arc_doc_id.
+    ls_doc-ar_date    = ls_a01-ar_date.
+    append ls_doc to lt_docs.
+  endloop.
+
+  loop at lt_toa02 into data(ls_a02).
+    clear ls_doc.
+*    ls_doc-source_tab = 'TOA02'.
+    ls_doc-MANDANT = sy-MANDT.
+    ls_doc-sap_object = ls_a02-sap_object.
+    ls_doc-object_id  = ls_a02-object_id.
+    ls_doc-archiv_id  = ls_a02-archiv_id.
+    ls_doc-arc_doc_id = ls_a02-arc_doc_id.
+    ls_doc-ar_date    = ls_a02-ar_date.
+    append ls_doc to lt_docs.
+  endloop.
+
+  loop at lt_toa03 into data(ls_a03).
+    clear ls_doc.
+*    ls_doc-source_tab = 'TOA03'.
+    ls_doc-MANDANT = sy-MANDT.
+    ls_doc-sap_object = ls_a03-sap_object.
+    ls_doc-object_id  = ls_a03-object_id.
+    ls_doc-archiv_id  = ls_a03-archiv_id.
+    ls_doc-arc_doc_id = ls_a03-arc_doc_id.
+    ls_doc-ar_date    = ls_a03-ar_date.
+    append ls_doc to lt_docs.
+  endloop.
+
+  loop at lt_toahr into data(ls_hr).
+    clear ls_doc.
+*    ls_doc-source_tab = 'TOAHR'.
+    ls_doc-MANDANT = sy-MANDT.
+    ls_doc-sap_object = ls_hr-sap_object.
+    ls_doc-object_id  = ls_hr-object_id.
+    ls_doc-archiv_id  = ls_hr-archiv_id.
+    ls_doc-arc_doc_id = ls_hr-arc_doc_id.
+    ls_doc-ar_date    = ls_hr-ar_date.
+    append ls_doc to lt_docs.
+  endloop.
+
+
+*  loop at lt_srgbtbrel into data(ls_srgbtbrel).
+*    clear ls_doc.
+*    ls_doc-source_tab = 'SRGBTBREL'.
+*    ls_doc-sap_object = ls_srgbtbrel-TYPEID_A.
+**    ls_doc-object_id  = ls_srgbtbrel-object_id.
+*    ls_doc-archiv_id  = ls_srgbtbrel-LOGSYS_A.
+*    ls_doc-arc_doc_id = ls_srgbtbrel-BRELGUID.
+**    ls_doc-ar_date    = ls_srgbtbrel-ar_date.
+*    append ls_doc to lt_docs.
+*  endloop.
+endform.
+*&---------------------------------------------------------------------*
+*& Form deduplicate_docs
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+form deduplicate_docs .
+  sort lt_docs by archiv_id arc_doc_id.
+  delete adjacent duplicates from lt_docs comparing archiv_id arc_doc_id.
+endform.
+
+*&---------------------------------------------------------------------*
+*& Form check_online_status "Split lt_docs
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+FORM split_docs_5
+  USING    it_docs TYPE tt_docs
+  CHANGING ct_1    TYPE tt_docs
+           ct_2    TYPE tt_docs
+           ct_3    TYPE tt_docs
+           ct_4    TYPE tt_docs
+           ct_5    TYPE tt_docs.
+
+  DATA: lv_total TYPE i,
+        lv_size  TYPE i,
+        lv_idx   TYPE i.
+
+  CLEAR: ct_1, ct_2, ct_3, ct_4, ct_5.
+
+  lv_total = lines( it_docs ).
+  IF lv_total = 0.
+    RETURN.
+  ENDIF.
+
+  "Ceil(total/5)
+  lv_size = ( lv_total + 5 - 1 ) DIV 5.
+
+  lv_idx = 0.
+  LOOP AT it_docs INTO DATA(ls_doc).
+    lv_idx = lv_idx + 1.
+
+    IF lv_idx <= lv_size.
+      APPEND ls_doc TO ct_1.
+    ELSEIF lv_idx <= 2 * lv_size.
+      APPEND ls_doc TO ct_2.
+    ELSEIF lv_idx <= 3 * lv_size.
+      APPEND ls_doc TO ct_3.
+    ELSEIF lv_idx <= 4 * lv_size.
+      APPEND ls_doc TO ct_4.
+    ELSE.
+      APPEND ls_doc TO ct_5.
+    ENDIF.
+
+  ENDLOOP.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form check_online_status "NO PARRALLEL PROCESSING
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+*form check_online_status .
+*  clear : lt_result, ls_doc, gv_error, gv_succes.
+*
+*  loop at lt_docs into ls_doc.
+*
+*    clear ls_res.
+*    ls_res-source_tab = ls_doc-source_tab.
+*    ls_res-sap_object = ls_doc-sap_object.
+*    ls_res-object_id  = ls_doc-object_id.
+*    ls_res-crep_id    = ls_doc-archiv_id.
+*    ls_res-doc_id     = ls_doc-arc_doc_id.
+*
+**    "Appel SCMS_HTTP_INFO
+**    call function 'SCMS_HTTP_INFO'
+**      exporting
+**        mandt         = sy-mandt
+**        crep_id       = ls_res-crep_id
+**        doc_id        = ls_res-doc_id
+**      importing
+**        status        = ls_res-status
+**        arch_date     = ls_res-arch_date
+**        arch_time     = ls_res-arch_time
+**        chng_date     = ls_res-chng_date
+**        chng_time     = ls_res-chng_time
+**        data_mimetype = ls_res-data_mimetype
+**      exceptions
+**        error_http    = 1
+**        error_rfc     = 2
+**        others        = 3.
+*
+*     call function 'ARCHIVOBJECT_STATUS'
+*      exporting
+*        archiv_doc_id            = ls_res-doc_id
+*        archiv_id                = ls_res-crep_id
+*      importing
+*        archiv_object_status     = ls_res-status
+*        ar_date                  = ls_res-arch_date
+*        ar_time                  = ls_res-arch_time
+*        document_type            = ls_res-doc_type
+*      exceptions
+*        error_archiv             = 1
+*        error_communicationtable = 2
+*        error_kernel             = 3
+*        others                   = 4.
+*
+*    ls_res-rc = sy-subrc.
+*
+*    if ls_res-rc <> 0.
+*      ls_res-status = 'ERROR'.
+*      GV_ERROR = gv_error + 1.
+*      case ls_res-rc.
+*        when 1. ls_res-err_text = 'SCMS_HTTP_INFO: ERROR_HTTP'.
+*        when 2. ls_res-err_text = 'SCMS_HTTP_INFO: ERROR_RFC'.
+*        when others. ls_res-err_text = 'SCMS_HTTP_INFO: OTHER_ERROR'.
+*      endcase.
+*      ELSE.
+*        GV_succes = GV_succes + 1.
+*    endif.
+*
+*       if  ls_res-crep_id is INITIAL or ls_res-doc_id is INITIAL.
+*      CLEAR: ls_res-err_text.
+*      ls_res-err_text = 'Content repository and document id are mandatory'.
+*      ENDIF.
+*
+*    if p_beform = 'X'.
+*      ls_res-STATUS_BEFM = ls_res-status.
+*      ELSEIF P_AFTERM = 'X'.
+*        ls_res-STATUS_AFM = ls_res-status.
+*      ENDIF.
+*
+*    append ls_res to lt_result.
+*
+*  endloop.
+*endform.
+"
+"Parallel processing
+form start_chunk_task USING it_chunk TYPE ZTTOTX_MONITORING.
+  DATA lv_taskname TYPE /saptrx/to_guid.
+  data lt_chunk_rfc TYPE zttotx_monitoring.
+
+*  CLEAR lt_chunk_rfc.
+*  lt_chunk_rfc[] = it_chunk[].
+
+  CALL FUNCTION '/SAPTRX/DTI_GENERATE_TASK_NAME'
+    IMPORTING
+      e_task_id = lv_taskname.
+
+  "<<< FM THAT PROCESSES A WHOLE CHUNK >>>
+  CALL FUNCTION 'Z_PARALLEL_PROCESS_TAB' STARTING NEW TASK lv_taskname
+    DESTINATION IN GROUP 'parallel_generators'
+    PERFORMING call_back_chunk ON END OF TASK
+    EXPORTING
+      it_monitoring     = it_chunk
+      ip_beform         = p_beform
+      ip_postm          = p_afterm.
+*    TABLES
+*      it_monitoring_tab = it_chunk.
+
+  IF sy-subrc = 0.
+    lv_counter = lv_counter + 1.
+  ENDIF.
+endform.
+
+FORM check_online_status .
+
+  DATA: lt_docs1 TYPE zttotx_monitoring,
+        lt_docs2 TYPE zttotx_monitoring,
+        lt_docs3 TYPE zttotx_monitoring,
+        lt_docs4 TYPE zttotx_monitoring,
+        lt_docs5 TYPE zttotx_monitoring.
+
+  CLEAR: lt_result, gv_error, gv_succes, lv_counter, gv_task.
+
+  "Split into 5 chunks
+  PERFORM split_docs_5 USING lt_docs
+                      CHANGING lt_docs1 lt_docs2 lt_docs3 lt_docs4 lt_docs5.
+
+  "Start max 5 tasks (only if chunk not initial)
+  IF lt_docs1 IS NOT INITIAL.
+    PERFORM start_chunk_task USING lt_docs1.
+  ENDIF.
+  IF lt_docs2 IS NOT INITIAL.
+    PERFORM start_chunk_task USING lt_docs2.
+  ENDIF.
+  IF lt_docs3 IS NOT INITIAL.
+    PERFORM start_chunk_task USING lt_docs3.
+  ENDIF.
+  IF lt_docs4 IS NOT INITIAL.
+    PERFORM start_chunk_task USING lt_docs4.
+  ENDIF.
+  IF lt_docs5 IS NOT INITIAL.
+    PERFORM start_chunk_task USING lt_docs5.
+  ENDIF.
+
+  gv_task = lv_counter.
+  WAIT FOR ASYNCHRONOUS TASKS UNTIL gv_task = 0.
+
+ENDFORM.
+
+form call_back using p_task type clike.
+
+  receive results from function 'Z_PARALLEL_PROCESS' importing ET_RESULT = gs_monitoring_ind.
+
+  append gs_monitoring_ind to lt_result.
+
+  lv_counter = lv_counter - 1.
+
+endform.
+
+form call_back_chunk using p_task type clike.
+
+   DATA lt_chunk_result TYPE TABLE OF zotx_monitoring.
+
+  RECEIVE RESULTS FROM FUNCTION 'Z_PARALLEL_PROCESS_TAB'
+    IMPORTING
+      et_result = lt_chunk_result.
+
+  APPEND LINES OF lt_chunk_result TO lt_result.
+
+  gv_task = gv_task - 1.
+
+endform.
+
+
+*&---------------------------------------------------------------------*
+*& Form Update monitoring table
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+FORM update_monitoring_table.
+
+  DATA: lt_db    TYPE STANDARD TABLE OF zotx_monitoring WITH EMPTY KEY,
+        ls_db    TYPE zotx_monitoring,
+        lv_batch TYPE i VALUE 5000. "adjust if needed: 5000 / 20000 / 50000
+
+  IF lt_result IS INITIAL.
+    RETURN.
+  ENDIF.
+
+  LOOP AT lt_result INTO DATA(ls_r).
+
+    CLEAR ls_db.
+
+    ls_db-mandant    = sy-mandt.
+    ls_db-sap_object = ls_r-sap_object.
+    ls_db-object_id  = ls_r-object_id.
+    ls_db-archiv_id  = ls_r-archiv_id.
+    ls_db-arc_doc_id = ls_r-arc_doc_id.
+    ls_db-ar_date    = ls_r-ar_date.
+
+    IF ls_r-error <> 0.
+      ls_db-error      = ls_r-error_desc.
+      ls_db-error_desc = ls_r-error_desc.
+    ELSE.
+      CLEAR: ls_db-error, ls_db-error_desc.
+    ENDIF.
+
+    if  ls_r-archiv_id is INITIAL or ls_r-archiv_id is INITIAL.
+      CLEAR: ls_db-error, ls_db-error_desc.
+      ls_db-error = 'Content repository and document id are mandatory'.
+      ls_db-error_desc = 'Content repository and document id are mandatory'.
+      ENDIF.
+
+    DATA(lv_mig_status) = VALUE zmig_status( ).
+
+    IF ls_r-error <> 0.
+      lv_mig_status = 'ERROR'.
+    ELSE.
+      CASE ls_r-status.
+        WHEN 'ONLINE'. lv_mig_status = 'ONLINE'.
+        WHEN ''.       lv_mig_status = 'OFFLINE'.
+        WHEN OTHERS.   lv_mig_status = ls_r-status.
+      ENDCASE.
+    ENDIF.
+
+    IF p_beform = abap_true.
+      ls_db-zstatus_premig = lv_mig_status.
+    ELSEIF p_afterm = abap_true.
+      ls_db-zstatus_postmig = lv_mig_status.
+      ls_db-migration_date  = sy-datum.
+    ENDIF.
+
+    APPEND ls_db TO lt_db.
+
+    "---- Batch flush
+    IF lines( lt_db ) >= lv_batch.
+
+      MODIFY zotx_monitoring FROM TABLE lt_db.
+
+      IF p_test = abap_true.
+        ROLLBACK WORK.
+        CLEAR lt_db.
+        EXIT. "stop in test mode after first batch
+      ELSE.
+        IF sy-subrc = 0 AND sy-dbcnt > 0.
+          COMMIT WORK. "avoid AND WAIT for performance
+        ENDIF.
+      ENDIF.
+
+      CLEAR lt_db.
+
+    ENDIF.
+
+  ENDLOOP.
+
+  "---- Flush remaining rows
+  IF lt_db IS NOT INITIAL.
+
+    MODIFY zotx_monitoring FROM TABLE lt_db.
+
+    IF p_test = abap_true.
+      ROLLBACK WORK.
+    ELSE.
+      IF sy-subrc = 0 AND sy-dbcnt > 0.
+        COMMIT WORK.
+      ENDIF.
+    ENDIF.
+
+    CLEAR lt_db.
+
+  ENDIF.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form display_sample
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+form display_sample .
+  data: lo_alv     type ref to cl_salv_table,
+        columns    type ref to cl_salv_columns_table,
+        column     type ref to cl_salv_column,
+        lo_header  type ref to cl_salv_form_layout_grid,
+        lo_h_label type ref to cl_salv_form_label,
+        lo_h_flow  type ref to cl_salv_form_layout_flow,
+        lc_msg     type ref to cx_salv_msg.
+  DATA : lv_countresult TYPE i.
+
+
+  "Si table vide, message + exit
+  if lt_result is initial.
+    write: / 'No result to display.'.
+    return.
+  endif.
+
+  DATA(lv_count) = lines( lt_result ).
+
+  try.
+      cl_salv_table=>factory(
+        importing
+          r_salv_table = lo_alv
+        changing
+          t_table      = lt_result ).
+
+      columns = lo_alv->get_columns( ).
+      create object lo_header.
+
+      lo_h_label = lo_header->create_label( row = 1 column = 1 ).
+      lo_h_label->set_text( 'Final result: ') .
+
+      lo_h_flow = lo_header->create_flow( row = 2 column = 1 ).
+      lo_h_flow->create_text( text =  text-001 ) .
+      lo_h_flow  = lo_header->create_flow( row = 2 column = 2 ).
+      lo_h_flow->create_text(  text =  lv_count ) . "LV to process
+
+      lo_h_flow = lo_header->create_flow( row = 4 column = 1 ).
+      lo_h_flow->create_text( text =  text-002 ) .
+      lo_h_flow  = lo_header->create_flow( row = 4 column = 2 ).
+      lo_h_flow->create_text(  text =  GV_SUCCES ) . "LV processed
+
+      lo_h_flow = lo_header->create_flow( row = 5 column = 1 ).
+      lo_h_flow->create_text( text =  text-003 ) .
+      lo_h_flow  = lo_header->create_flow( row = 5 column = 2 ).
+      lo_h_flow->create_text(  text =  GV_ERROR ) . "LV not processed
+
+      "Options d'affichage
+      lo_alv->get_functions( )->set_all( abap_true ).   "tri/filtre/export
+      lo_alv->get_display_settings( )->set_striped_pattern( abap_true ).
+      lo_alv->get_display_settings( )->set_list_header(
+        |ArchiveLink Monitoring - Results ({ lines( lt_result ) } rows)| ).
+
+      "Optimise largeur colonnes
+      lo_alv->get_columns( )->set_optimize( abap_true ).
+
+      data not_found type ref to cx_salv_not_found.
+      try.
+
+          column = columns->get_column( 'AR_DATE' ).
+          column->set_short_text( 'Date' ).
+          column->set_medium_text( 'Archiving date' ).
+          column->set_long_text( 'Archiving date' ).
+
+          column = columns->get_column( 'ERROR' ).
+          column->set_short_text( 'Error' ).
+          column->set_medium_text( 'Error number' ).
+          column->set_long_text( 'Error number' ).
+
+          column = columns->get_column( 'ZSTATUS_PREMIG' ).
+          column->set_short_text( 'Before mig' ).
+          column->set_medium_text( 'Before migration' ).
+          column->set_long_text( 'Status Before migration' ).
+
+          column = columns->get_column( 'ZSTATUS_POSTMIG' ).
+          column->set_short_text( 'After mig' ).
+          column->set_medium_text( 'After migration' ).
+          column->set_long_text( 'Status After migration' ).
+
+          column = columns->get_column( 'ERROR_DESC' ).
+          column->set_short_text( 'Error' ).
+          column->set_medium_text( 'Error description' ).
+          column->set_long_text( 'Error description' ).
+
+
+
+        catch cx_salv_not_found into not_found.
+          " error handling
+      endtry.
+
+      column = columns->get_column( 'OBJECT_ID' ).
+      column->set_visible( abap_false ).
+
+      column = columns->get_column( 'STATUS' ).
+      column->set_visible( abap_false ).
+
+      column = columns->get_column( 'DEL_DATE' ).
+      column->set_visible( abap_false ).
+
+      column = columns->get_column( 'RESERVE' ).
+      column->set_visible( abap_false ).
+
+      lo_alv->set_top_of_list( lo_header ).
+      lo_alv->set_top_of_list_print( lo_header ).
+      lo_alv->display( ).
+
+    catch cx_salv_msg into data(lx_msg).
+      write: / 'ALV error:', lx_msg->get_text( ).
+  endtry.
+endform.
