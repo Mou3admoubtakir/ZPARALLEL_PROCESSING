@@ -17,6 +17,7 @@
 * Validation date ........... :                              *
 *----------------------------------------------------------------------*
 REPORT ZOTX_MONITORING.
+DATA gv_status TYPE SAEDOKSTAT.
 TYPES: tt_docs   TYPE TABLE OF zotx_monitoring ,
        tt_result1 TYPE TABLE OF zotx_monitoring.
   DATA : gv_task TYPE i,
@@ -28,7 +29,9 @@ data: lv_start type i,
       lv_end   type i,
       lv_diff  type i,
       gv_error TYPE i,
-      gv_succes TYPE i.
+      gv_succes TYPE i,
+      gv_error_total TYPE i,
+      gv_succes_total TYPE i.
 
 get run time field lv_start.
 
@@ -71,6 +74,8 @@ types tt_doc type standard table of ty_doc with empty key.
 
 data: lt_docs type TABLE OF ZOTX_MONITORING,
       ls_doc  type ZOTX_MONITORING.
+ data:     lt_zotx TYPE HASHED TABLE OF  ZOTX_MONITORING
+       WITH UNIQUE KEY ARC_DOC_ID.
 data: lt_toa01 type tt_toa01,
       lt_toa02 type tt_toa02,
       lt_toa03 type tt_toa03,
@@ -116,6 +121,7 @@ data: lt_loio_ids type tt_loio_id,
 selection-screen begin of block b1 with frame title text-b01.
   parameters: p_test as checkbox default 'X',
               p_bo   type c length 10.   "Business object
+  select-options: s_sapobj for ls_toa01-SAP_OBJECT no intervals.   "SAP object ID (example)
   select-options: s_objid for ls_toa01-object_id no intervals.   "SAP object ID (example)
 selection-screen end of block b1.
 
@@ -149,27 +155,31 @@ start-of-selection.
 *    select * from toaom into table @lt_toaom
 *      where archiv_id in @s_arid.
 *  endif.
-
-  select * from toa01 into table @lt_toa01 "up to 1000 rows"up to 10 rows
-   where object_id   in @s_objid
+"SELECT FROM ARCHIVING TABLES
+  select * from toa01 into table @lt_toa01 "up to 100 rows"up to 10 rows
+   where sap_object  in @s_sapobj
+     and object_id   in @s_objid
      and archiv_id   in @s_arid
      and arc_doc_id  in @s_docid
      and ar_date in @s_archdt.
 
   select * from toa02 into table @lt_toa02 "up to 100 rows
-    where object_id   in @s_objid
+    where sap_object  in @s_sapobj
+   and  object_id   in @s_objid
    and archiv_id   in @s_arid
    and arc_doc_id  in @s_docid
    and ar_date in @s_archdt.
 
   select * from toa03 into table @lt_toa03 "up to 100 rows
-  where object_id   in @s_objid
+  where sap_object  in @s_sapobj
+ and   object_id   in @s_objid
  and archiv_id   in @s_arid
  and arc_doc_id  in @s_docid
  and ar_date in @s_archdt.
 
   select * from toahr into table @lt_toahr "up to 100 rows
-where object_id   in @s_objid
+where sap_object  in @s_sapobj
+and  object_id   in @s_objid
 and archiv_id   in @s_arid
 and arc_doc_id  in @s_docid
 and ar_date in @s_archdt.
@@ -178,7 +188,6 @@ and ar_date in @s_archdt.
 *  FROM srgbtbrel
 *  INTO TABLE @lt_srgbtbrel up to 10 rows
 *  WHERE instid_a IN @s_objid.
-
 
 
 *  uline.
@@ -285,16 +294,26 @@ form gather_docs .
   endloop.
 
 
-*  loop at lt_srgbtbrel into data(ls_srgbtbrel).
-*    clear ls_doc.
+  loop at lt_srgbtbrel into data(ls_srgbtbrel).
+    clear ls_doc.
 *    ls_doc-source_tab = 'SRGBTBREL'.
-*    ls_doc-sap_object = ls_srgbtbrel-TYPEID_A.
-**    ls_doc-object_id  = ls_srgbtbrel-object_id.
-*    ls_doc-archiv_id  = ls_srgbtbrel-LOGSYS_A.
-*    ls_doc-arc_doc_id = ls_srgbtbrel-BRELGUID.
-**    ls_doc-ar_date    = ls_srgbtbrel-ar_date.
-*    append ls_doc to lt_docs.
-*  endloop.
+    ls_doc-sap_object = ls_srgbtbrel-TYPEID_A.
+*    ls_doc-object_id  = ls_srgbtbrel-object_id.
+    ls_doc-archiv_id  = ls_srgbtbrel-LOGSYS_A.
+    ls_doc-arc_doc_id = ls_srgbtbrel-BRELGUID.
+*    ls_doc-ar_date    = ls_srgbtbrel-ar_date.
+    append ls_doc to lt_docs.
+  endloop.
+
+  "Select the current stored documents
+  SELECT * FROM zotx_monitoring
+    INTO TABLE @lt_zotx
+    FOR ALL ENTRIES IN @lt_docs
+    where sap_object  = @lt_docs-SAP_OBJECT
+      and  object_id   = @lt_docs-object_id
+      and archiv_id   = @lt_docs-archiv_id
+      and arc_doc_id  = @lt_docs-arc_doc_id
+      and ar_date = @lt_docs-ar_date.
 endform.
 *&---------------------------------------------------------------------*
 *& Form deduplicate_docs
@@ -336,10 +355,10 @@ FORM split_docs_5
     RETURN.
   ENDIF.
 
-  "Ceil(total/5)
+  "Variable to divide into 5 slots
   lv_size = ( lv_total + 5 - 1 ) DIV 5.
 
-  lv_idx = 0.
+  lv_idx = 0."Counter of slots
   LOOP AT it_docs INTO DATA(ls_doc).
     lv_idx = lv_idx + 1.
 
@@ -521,9 +540,14 @@ form call_back_chunk using p_task type clike.
 
   RECEIVE RESULTS FROM FUNCTION 'Z_PARALLEL_PROCESS_TAB'
     IMPORTING
-      et_result = lt_chunk_result.
+      et_result = lt_chunk_result
+      ev_succes =  gv_succes
+      ev_error =  gv_error.
+
 
   APPEND LINES OF lt_chunk_result TO lt_result.
+  gv_succes_total = gv_succes_total + gv_succes.
+  gv_error_total = gv_error_total + gv_error.
 
   gv_task = gv_task - 1.
 
@@ -550,25 +574,27 @@ FORM update_monitoring_table.
 
   LOOP AT lt_result INTO DATA(ls_r).
 
-    CLEAR ls_db.
+    CLEAR : ls_db.
 
     ls_db-mandant    = sy-mandt.
     ls_db-sap_object = ls_r-sap_object.
     ls_db-object_id  = ls_r-object_id.
     ls_db-archiv_id  = ls_r-archiv_id.
     ls_db-arc_doc_id = ls_r-arc_doc_id.
+    ls_db-AR_OBJECT = ls_r-AR_OBJECT.
     ls_db-ar_date    = ls_r-ar_date.
 
     IF ls_r-error <> 0.
-      ls_db-error      = ls_r-error_desc.
+      ls_db-error      = ls_r-error.
       ls_db-error_desc = ls_r-error_desc.
     ELSE.
       CLEAR: ls_db-error, ls_db-error_desc.
     ENDIF.
 
-    if  ls_r-archiv_id is INITIAL or ls_r-archiv_id is INITIAL.
+    "No CR or ID => Error
+    if  ls_r-archiv_id is INITIAL or ls_r-arc_doc_id is INITIAL.
       CLEAR: ls_db-error, ls_db-error_desc.
-      ls_db-error = 'Content repository and document id are mandatory'.
+      ls_db-error = 1.
       ls_db-error_desc = 'Content repository and document id are mandatory'.
       ENDIF.
 
@@ -576,19 +602,27 @@ FORM update_monitoring_table.
 
     IF ls_r-error <> 0.
       lv_mig_status = 'ERROR'.
+      ls_db-error = 1.
     ELSE.
-      CASE ls_r-status.
-        WHEN 'ONLINE'. lv_mig_status = 'ONLINE'.
-        WHEN ''.       lv_mig_status = 'OFFLINE'.
-        WHEN OTHERS.   lv_mig_status = ls_r-status.
-      ENDCASE.
+      ls_db-error = 0.
+*      CASE ls_r-status.
+*        WHEN 'ONLINE'. lv_mig_status = 'ONLINE'.
+*        WHEN ''.       lv_mig_status = 'OFFLINE'.
+*        WHEN OTHERS.   lv_mig_status = 'Not known'.
+*      ENDCASE.
     ENDIF.
+    "Read data before updating, to avoid losing it
+    READ TABLE lt_zotx INTO DATA(ls_zotx) WITH TABLE KEY arc_doc_id = ls_r-arc_doc_id.
 
     IF p_beform = abap_true.
-      ls_db-zstatus_premig = lv_mig_status.
+
+      ls_db-zstatus_postmig = ls_zotx-zstatus_postmig.
+      ls_db-zstatus_premig = ls_r-zstatus_premig.
+      ls_db-migration_date  = sy-datum."To change
     ELSEIF p_afterm = abap_true.
-      ls_db-zstatus_postmig = lv_mig_status.
-      ls_db-migration_date  = sy-datum.
+      ls_db-zstatus_premig = ls_zotx-zstatus_premig.
+      ls_db-zstatus_postmig = ls_r-zstatus_postmig.
+      ls_db-migration_date  = sy-datum."To change by the actual date of migration
     ENDIF.
 
     APPEND ls_db TO lt_db.
@@ -680,12 +714,12 @@ form display_sample .
       lo_h_flow = lo_header->create_flow( row = 4 column = 1 ).
       lo_h_flow->create_text( text =  text-002 ) .
       lo_h_flow  = lo_header->create_flow( row = 4 column = 2 ).
-      lo_h_flow->create_text(  text =  GV_SUCCES ) . "LV processed
+      lo_h_flow->create_text(  text =  gv_succes_total ) . "LV processed
 
       lo_h_flow = lo_header->create_flow( row = 5 column = 1 ).
       lo_h_flow->create_text( text =  text-003 ) .
       lo_h_flow  = lo_header->create_flow( row = 5 column = 2 ).
-      lo_h_flow->create_text(  text =  GV_ERROR ) . "LV not processed
+      lo_h_flow->create_text(  text =  gv_error_total ) . "LV not processed
 
       "Options d'affichage
       lo_alv->get_functions( )->set_all( abap_true ).   "tri/filtre/export
@@ -733,14 +767,9 @@ form display_sample .
       column = columns->get_column( 'OBJECT_ID' ).
       column->set_visible( abap_false ).
 
-      column = columns->get_column( 'STATUS' ).
-      column->set_visible( abap_false ).
+*      column = columns->get_column( 'STATUS' ).
+*      column->set_visible( abap_false ).
 
-      column = columns->get_column( 'DEL_DATE' ).
-      column->set_visible( abap_false ).
-
-      column = columns->get_column( 'RESERVE' ).
-      column->set_visible( abap_false ).
 
       lo_alv->set_top_of_list( lo_header ).
       lo_alv->set_top_of_list_print( lo_header ).
