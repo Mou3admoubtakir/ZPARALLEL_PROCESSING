@@ -75,7 +75,7 @@ types tt_doc type standard table of ty_doc with empty key.
 data: lt_docs type TABLE OF ZOTX_MONITORING,
       ls_doc  type ZOTX_MONITORING.
  data:     lt_zotx TYPE HASHED TABLE OF  ZOTX_MONITORING
-       WITH UNIQUE KEY ARC_DOC_ID.
+       WITH UNIQUE KEY SAP_OBJECT OBJECT_ID ARCHIV_ID ARC_DOC_ID.
 data: lt_toa01 type tt_toa01,
       lt_toa02 type tt_toa02,
       lt_toa03 type tt_toa03,
@@ -156,7 +156,7 @@ start-of-selection.
 *      where archiv_id in @s_arid.
 *  endif.
 "SELECT FROM ARCHIVING TABLES
-  select * from toa01 into table @lt_toa01 "up to 100 rows"up to 10 rows
+  select * from toa01 into table @lt_toa01 up to 1000 rows"up to 10 rows
    where sap_object  in @s_sapobj
      and object_id   in @s_objid
      and archiv_id   in @s_arid
@@ -342,13 +342,19 @@ FORM split_docs_5
            ct_2    TYPE tt_docs
            ct_3    TYPE tt_docs
            ct_4    TYPE tt_docs
-           ct_5    TYPE tt_docs.
+           ct_5    TYPE tt_docs
+           ct_6    TYPE tt_docs
+           ct_7    TYPE tt_docs
+          ct_8    TYPE tt_docs
+           ct_9    TYPE tt_docs
+            ct_10    TYPE tt_docs.
 
   DATA: lv_total TYPE i,
         lv_size  TYPE i,
         lv_idx   TYPE i.
 
-  CLEAR: ct_1, ct_2, ct_3, ct_4, ct_5.
+  CLEAR: ct_1, ct_2, ct_3, ct_4, ct_5,
+         ct_6, ct_7, ct_8, ct_9, ct_10.
 
   lv_total = lines( it_docs ).
   IF lv_total = 0.
@@ -356,7 +362,7 @@ FORM split_docs_5
   ENDIF.
 
   "Variable to divide into 5 slots
-  lv_size = ( lv_total + 5 - 1 ) DIV 5.
+  lv_size = ( lv_total + 10 - 1 ) DIV 10.
 
   lv_idx = 0."Counter of slots
   LOOP AT it_docs INTO DATA(ls_doc).
@@ -370,8 +376,18 @@ FORM split_docs_5
       APPEND ls_doc TO ct_3.
     ELSEIF lv_idx <= 4 * lv_size.
       APPEND ls_doc TO ct_4.
+      ELSEIF lv_idx <= 5 * lv_size.
+        APPEND ls_doc to ct_5.
+      ELSEIF lv_idx <= 6 * lv_size.
+        APPEND ls_doc to ct_6.
+        ELSEIF lv_idx <= 7 * lv_size.
+          APPEND ls_doc to ct_7.
+        ELSEIF  lv_idx <= 8 * lv_size.
+          APPEND ls_doc to ct_8.
+        ELSEIF  lv_idx <= 9 * lv_size.
+          APPEND ls_doc TO ct_9.
     ELSE.
-      APPEND ls_doc TO ct_5.
+      APPEND ls_doc TO ct_10.
     ENDIF.
 
   ENDLOOP.
@@ -494,15 +510,21 @@ FORM check_online_status .
         lt_docs2 TYPE zttotx_monitoring,
         lt_docs3 TYPE zttotx_monitoring,
         lt_docs4 TYPE zttotx_monitoring,
-        lt_docs5 TYPE zttotx_monitoring.
+        lt_docs5 TYPE zttotx_monitoring,
+        lt_docs6 TYPE zttotx_monitoring,
+        lt_docs7 TYPE zttotx_monitoring,
+        lt_docs8 TYPE zttotx_monitoring,
+        lt_docs9 TYPE zttotx_monitoring,
+        lt_docs10 TYPE zttotx_monitoring.
 
   CLEAR: lt_result, gv_error, gv_succes, lv_counter, gv_task.
 
   "Split into 5 chunks
   PERFORM split_docs_5 USING lt_docs
-                      CHANGING lt_docs1 lt_docs2 lt_docs3 lt_docs4 lt_docs5.
+                      CHANGING lt_docs1 lt_docs2 lt_docs3 lt_docs4 lt_docs5
+                               lt_docs6 lt_docs7 lt_docs8 lt_docs9 lt_docs10.
 
-  "Start max 5 tasks (only if chunk not initial)
+  "Start 10 tasks only if table are not initial
   IF lt_docs1 IS NOT INITIAL.
     PERFORM start_chunk_task USING lt_docs1.
   ENDIF.
@@ -517,6 +539,26 @@ FORM check_online_status .
   ENDIF.
   IF lt_docs5 IS NOT INITIAL.
     PERFORM start_chunk_task USING lt_docs5.
+  ENDIF.
+
+  IF lt_docs6 IS NOT INITIAL.
+    PERFORM start_chunk_task USING lt_docs6.
+  ENDIF.
+
+  IF lt_docs7 IS NOT INITIAL.
+    PERFORM start_chunk_task USING lt_docs7.
+  ENDIF.
+
+  IF lt_docs8 IS NOT INITIAL.
+    PERFORM start_chunk_task USING lt_docs8.
+  ENDIF.
+
+  IF lt_docs9 IS NOT INITIAL.
+    PERFORM start_chunk_task USING lt_docs9.
+  ENDIF.
+
+  IF lt_docs10 IS NOT INITIAL.
+    PERFORM start_chunk_task USING lt_docs10.
   ENDIF.
 
   gv_task = lv_counter.
@@ -540,16 +582,16 @@ form call_back_chunk using p_task type clike.
 
   RECEIVE RESULTS FROM FUNCTION 'Z_PARALLEL_PROCESS_TAB'
     IMPORTING
-      et_result = lt_chunk_result
-      ev_succes =  gv_succes
-      ev_error =  gv_error.
+      et_result = lt_chunk_result "Chunk slices results to add to the final table below
+      ev_succes =  gv_succes "Successes
+      ev_error =  gv_error.  "Errors
 
-
+  " ADD EVERY slice DATA TO the final table result
   APPEND LINES OF lt_chunk_result TO lt_result.
   gv_succes_total = gv_succes_total + gv_succes.
   gv_error_total = gv_error_total + gv_error.
 
-  gv_task = gv_task - 1.
+  gv_task = gv_task - 1. "Logic to parralel processing
 
 endform.
 
@@ -611,8 +653,10 @@ FORM update_monitoring_table.
 *        WHEN OTHERS.   lv_mig_status = 'Not known'.
 *      ENDCASE.
     ENDIF.
-    "Read data before updating, to avoid losing it
-    READ TABLE lt_zotx INTO DATA(ls_zotx) WITH TABLE KEY arc_doc_id = ls_r-arc_doc_id.
+    "Read data before updating, to avoid losing status data
+    READ TABLE lt_zotx INTO DATA(ls_zotx) WITH TABLE KEY SAP_OBJECT = ls_r-sap_object OBJECT_ID = ls_r-OBJECT_ID
+    ARCHIV_ID = ls_r-ARCHIV_ID
+    arc_doc_id = ls_r-arc_doc_id.
 
     IF p_beform = abap_true.
 
