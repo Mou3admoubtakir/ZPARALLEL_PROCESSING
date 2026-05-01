@@ -17,6 +17,14 @@
 * Validation date ........... :                              *
 *----------------------------------------------------------------------*
 REPORT ZOTX_MONITORING.
+
+DATA: lr_sap_object TYPE RANGE OF zotx_monitoring-sap_object,
+lr_archiv_id TYPE RANGE OF zotx_monitoring-archiv_id,
+lr_object_id TYPE RANGE OF zotx_monitoring-object_id,
+lr_arc_doc_id TYPE RANGE OF zotx_monitoring-arc_doc_id.
+
+DATA: lv_total TYPE i,
+      lv_count TYPE i.
 DATA gv_status TYPE SAEDOKSTAT.
 TYPES: tt_docs   TYPE TABLE OF zotx_monitoring ,
        tt_result1 TYPE TABLE OF zotx_monitoring.
@@ -47,6 +55,8 @@ types: tt_toa01    type standard table of toa01 with empty key,
        tt_toa03    type standard table of toa03 with empty key,
        tt_toahr    type standard table of toahr with empty key,
        tt_toaom    type standard table of toaom with empty key,
+       tt_TOADL    type standard table of TOADL with empty key,
+       tt_admfiles    type standard table of ADMI_FILES with empty key,
        tt_srgbtbrel    type standard table of srgbtbrel with empty key,
        tt_sdokloio type standard table of sdokloio with empty key,
        tt_sdokphio type standard table of sdokphio with empty key,
@@ -74,8 +84,11 @@ types tt_doc type standard table of ty_doc with empty key.
 
 data: lt_docs type TABLE OF ZOTX_MONITORING,
       ls_doc  type ZOTX_MONITORING.
- data:     lt_zotx TYPE HASHED TABLE OF  ZOTX_MONITORING
-       WITH UNIQUE KEY SAP_OBJECT OBJECT_ID ARCHIV_ID ARC_DOC_ID.
+* data:     lt_zotx TYPE HASHED TABLE OF  ZOTX_MONITORING
+*       WITH UNIQUE KEY SAP_OBJECT OBJECT_ID ARCHIV_ID ARC_DOC_ID.
+ data:     gt_zotx TYPE HASHED TABLE OF  ZOTX_MONITORING
+       WITH UNIQUE KEY ARCHIV_ID ARC_DOC_ID.
+
 data: lt_toa01 type tt_toa01,
       lt_toa02 type tt_toa02,
       lt_toa03 type tt_toa03,
@@ -85,6 +98,9 @@ data: lt_toa01 type tt_toa01,
       lt_sdokloio  type tt_sdokloio,
       lt_sdokphio  type tt_sdokphio,
       lt_sdokphcl  type tt_sdokphcl.
+
+DATA : lt_TOADL TYPE tt_TOADL,
+       lt_admfiles TYPE tt_admfiles.
 
 "Résultat final après SCMS_HTTP_INFO
 types: begin of ty_result,
@@ -156,7 +172,7 @@ start-of-selection.
 *      where archiv_id in @s_arid.
 *  endif.
 "SELECT FROM ARCHIVING TABLES
-  select * from toa01 into table @lt_toa01 up to 1000 rows"up to 10 rows
+  select * from toa01 into table @lt_toa01 "up to 100 rows
    where sap_object  in @s_sapobj
      and object_id   in @s_objid
      and archiv_id   in @s_arid
@@ -183,6 +199,23 @@ and  object_id   in @s_objid
 and archiv_id   in @s_arid
 and arc_doc_id  in @s_docid
 and ar_date in @s_archdt.
+
+select DATUM, ARCHIV_ID, ARC_DOC_ID, SAP_OBJECT,
+  AR_OBJECT, DEL_DATE, AR_TIME
+  from TOADL into CORRESPONDING FIELDS OF table @lt_TOADL "up to 100 rows"up to 100 rows
+where  DATUM in @s_archdt
+and     archiv_id   in @s_arid
+and arc_doc_id  in @s_docid
+and    sap_object  in @s_sapobj
+AND ARCHIV_ID <> '' and ARC_DOC_ID <> ''.
+
+
+SELECT creat_date, crep, arch_docid
+  from ADMI_FILES into CORRESPONDING FIELDS OF table @lt_admfiles" up to 100 rows
+  WHERE CREAT_DATE in @s_archdt
+  and crep in @s_arid
+  and ARCH_DOCID in @s_docid
+  and crep <> '' and ARCH_DOCID <> ''.
 
 *    SELECT *
 *  FROM srgbtbrel
@@ -223,6 +256,21 @@ and ar_date in @s_archdt.
 
   data(lv_seconds) = lv_diff / 1000000.
 
+      WRITE: /.
+     WRITE: / '***************************************************************************************'.
+     WRITE: / '*                           Detail of the process                                     *'.
+     WRITE: / '***************************************************************************************'.
+     WRITE: /.
+    WRITE: / '***************************************************************************************'.
+    WRITE: / ' Documents to be treated  : ', lv_total.
+    WRITE: / ' Documents treated    : ', lv_count.
+    WRITE: / ' Documents with errors  : ', GV_ERROR_TOTAL.
+    WRITE: / ' Documents ok         : ', gv_succes_total.
+    WRITE: /.
+    WRITE: / '***************************************************************************************'.
+    WRITE: / '*                             End of the process                                       *'.
+    WRITE: / '***************************************************************************************'.
+
   write :/ 'Execution time (seconds): ', lv_seconds.
 *&---------------------------------------------------------------------*
 *& Form gather_docs
@@ -247,7 +295,7 @@ form gather_docs .
 
   loop at lt_toa01 into data(ls_a01).
     clear ls_doc.
-*    ls_doc-source_tab = 'TOA01'.
+    ls_doc-ZTABLE = 'TOA01'.
     ls_doc-MANDANT = sy-MANDT.
     ls_doc-sap_object = ls_a01-sap_object.
     ls_doc-object_id  = ls_a01-object_id.
@@ -259,7 +307,7 @@ form gather_docs .
 
   loop at lt_toa02 into data(ls_a02).
     clear ls_doc.
-*    ls_doc-source_tab = 'TOA02'.
+    ls_doc-ZTABLE = 'TOA02'.
     ls_doc-MANDANT = sy-MANDT.
     ls_doc-sap_object = ls_a02-sap_object.
     ls_doc-object_id  = ls_a02-object_id.
@@ -271,7 +319,7 @@ form gather_docs .
 
   loop at lt_toa03 into data(ls_a03).
     clear ls_doc.
-*    ls_doc-source_tab = 'TOA03'.
+    ls_doc-ZTABLE = 'TOA03'.
     ls_doc-MANDANT = sy-MANDT.
     ls_doc-sap_object = ls_a03-sap_object.
     ls_doc-object_id  = ls_a03-object_id.
@@ -283,7 +331,7 @@ form gather_docs .
 
   loop at lt_toahr into data(ls_hr).
     clear ls_doc.
-*    ls_doc-source_tab = 'TOAHR'.
+    ls_doc-ZTABLE = 'TOAHR'.
     ls_doc-MANDANT = sy-MANDT.
     ls_doc-sap_object = ls_hr-sap_object.
     ls_doc-object_id  = ls_hr-object_id.
@@ -294,26 +342,44 @@ form gather_docs .
   endloop.
 
 
-  loop at lt_srgbtbrel into data(ls_srgbtbrel).
+  loop at lt_TOADL into data(ls_toadl).
     clear ls_doc.
-*    ls_doc-source_tab = 'SRGBTBREL'.
-    ls_doc-sap_object = ls_srgbtbrel-TYPEID_A.
-*    ls_doc-object_id  = ls_srgbtbrel-object_id.
-    ls_doc-archiv_id  = ls_srgbtbrel-LOGSYS_A.
-    ls_doc-arc_doc_id = ls_srgbtbrel-BRELGUID.
-*    ls_doc-ar_date    = ls_srgbtbrel-ar_date.
+    ls_doc-ZTABLE = 'TOADL'.
+    ls_doc-MANDANT = sy-MANDT.
+    ls_doc-sap_object = ls_toadl-sap_object.
+*    ls_doc-object_id  = ls_toadl-object_id.
+    ls_doc-archiv_id  = ls_toadl-ARCHIV_ID.
+    ls_doc-arc_doc_id = ls_toadl-ARC_DOC_ID.
+    ls_doc-ar_date    = ls_toadl-DATUM.
     append ls_doc to lt_docs.
   endloop.
 
-  "Select the current stored documents
-  SELECT * FROM zotx_monitoring
-    INTO TABLE @lt_zotx
-    FOR ALL ENTRIES IN @lt_docs
-    where sap_object  = @lt_docs-SAP_OBJECT
-      and  object_id   = @lt_docs-object_id
-      and archiv_id   = @lt_docs-archiv_id
-      and arc_doc_id  = @lt_docs-arc_doc_id
-      and ar_date = @lt_docs-ar_date.
+    loop at lt_admfiles into data(ls_admfiles).
+    clear ls_doc.
+    ls_doc-ZTABLE = 'ADMI_FILES'.
+    ls_doc-MANDANT = sy-MANDT.
+*    ls_doc-sap_object = ls_admfiles-sap_object.
+*    ls_doc-object_id  = ls_toadl-object_id.
+    ls_doc-archiv_id  = ls_admfiles-CREP.
+    ls_doc-arc_doc_id = ls_admfiles-ARCH_DOCID.
+    ls_doc-ar_date    = ls_admfiles-CREAT_DATE.
+    append ls_doc to lt_docs.
+  endloop.
+
+
+*  loop at lt_srgbtbrel into data(ls_srgbtbrel).
+*    clear ls_doc.
+**    ls_doc-source_tab = 'SRGBTBREL'.
+*    ls_doc-sap_object = ls_srgbtbrel-TYPEID_A.
+**    ls_doc-object_id  = ls_srgbtbrel-object_id.
+*    ls_doc-archiv_id  = ls_srgbtbrel-LOGSYS_A.
+*    ls_doc-arc_doc_id = ls_srgbtbrel-BRELGUID.
+**    ls_doc-ar_date    = ls_srgbtbrel-ar_date.
+*    append ls_doc to lt_docs.
+*  endloop.
+
+
+*      and ar_date = @lt_docs-ar_date.
 endform.
 *&---------------------------------------------------------------------*
 *& Form deduplicate_docs
@@ -323,10 +389,31 @@ endform.
 *& -->  p1        text
 *& <--  p2        text
 *&---------------------------------------------------------------------*
-form deduplicate_docs .
-  sort lt_docs by archiv_id arc_doc_id.
-  delete adjacent duplicates from lt_docs comparing archiv_id arc_doc_id.
-endform.
+FORM deduplicate_docs.
+
+  SORT lt_docs by archiv_id arc_doc_id.
+  delete ADJACENT DUPLICATES FROM lt_docs COMPARING archiv_id arc_doc_id.
+
+  refresh gt_zotx.
+
+  "After migration
+  if lt_docs is NOT INITIAL.
+
+    SELECT archiv_id, arc_doc_id, zstatus_premig, zstatus_postmig
+    FROM zotx_monitoring
+    INTO CORRESPONDING FIELDS OF TABLE @gt_zotx
+    FOR ALL ENTRIES IN @lt_docs
+    WHERE sap_object = @lt_docs-SAP_OBJECT
+     and object_id   = @lt_docs-OBJECT_ID
+     and archiv_id = @lt_docs-ARCHIV_ID
+     and  arc_doc_id = @lt_docs-ARC_DOC_ID.
+
+
+    ENDIF.
+
+
+
+ENDFORM.
 
 *&---------------------------------------------------------------------*
 *& Form check_online_status "Split lt_docs
@@ -336,7 +423,7 @@ endform.
 *& -->  p1        text
 *& <--  p2        text
 *&---------------------------------------------------------------------*
-FORM split_docs_5
+FORM split_docs
   USING    it_docs TYPE tt_docs
   CHANGING ct_1    TYPE tt_docs
            ct_2    TYPE tt_docs
@@ -349,8 +436,7 @@ FORM split_docs_5
            ct_9    TYPE tt_docs
             ct_10    TYPE tt_docs.
 
-  DATA: lv_total TYPE i,
-        lv_size  TYPE i,
+  DATA: lv_size  TYPE i,
         lv_idx   TYPE i.
 
   CLEAR: ct_1, ct_2, ct_3, ct_4, ct_5,
@@ -361,7 +447,7 @@ FORM split_docs_5
     RETURN.
   ENDIF.
 
-  "Variable to divide into 5 slots
+  "Variable to divide into 7 slots
   lv_size = ( lv_total + 10 - 1 ) DIV 10.
 
   lv_idx = 0."Counter of slots
@@ -380,8 +466,8 @@ FORM split_docs_5
         APPEND ls_doc to ct_5.
       ELSEIF lv_idx <= 6 * lv_size.
         APPEND ls_doc to ct_6.
-        ELSEIF lv_idx <= 7 * lv_size.
-          APPEND ls_doc to ct_7.
+       ELSEIF lv_idx <= 7 * lv_size.
+         APPEND ls_doc to ct_7.
         ELSEIF  lv_idx <= 8 * lv_size.
           APPEND ls_doc to ct_8.
         ELSEIF  lv_idx <= 9 * lv_size.
@@ -519,8 +605,8 @@ FORM check_online_status .
 
   CLEAR: lt_result, gv_error, gv_succes, lv_counter, gv_task.
 
-  "Split into 5 chunks
-  PERFORM split_docs_5 USING lt_docs
+  "Split into 10 chunks
+  PERFORM split_docs USING lt_docs
                       CHANGING lt_docs1 lt_docs2 lt_docs3 lt_docs4 lt_docs5
                                lt_docs6 lt_docs7 lt_docs8 lt_docs9 lt_docs10.
 
@@ -608,7 +694,8 @@ FORM update_monitoring_table.
 
   DATA: lt_db    TYPE STANDARD TABLE OF zotx_monitoring WITH EMPTY KEY,
         ls_db    TYPE zotx_monitoring,
-        lv_batch TYPE i VALUE 5000. "adjust if needed: 5000 / 20000 / 50000
+        lv_batch TYPE i VALUE 5000, "adjust if needed: 5000 / 20000 / 50000
+        lv_storageData TYPE char10.
 
   IF lt_result IS INITIAL.
     RETURN.
@@ -616,15 +703,29 @@ FORM update_monitoring_table.
 
   LOOP AT lt_result INTO DATA(ls_r).
 
-    CLEAR : ls_db.
+    CLEAR : ls_db, lv_storageData.
 
     ls_db-mandant    = sy-mandt.
     ls_db-sap_object = ls_r-sap_object.
     ls_db-object_id  = ls_r-object_id.
     ls_db-archiv_id  = ls_r-archiv_id.
     ls_db-arc_doc_id = ls_r-arc_doc_id.
+    ls_db-ztable = ls_r-ztable.
     ls_db-AR_OBJECT = ls_r-AR_OBJECT.
     ls_db-ar_date    = ls_r-ar_date.
+    "Date format
+*    CALL FUNCTION 'CONVERT_DATE_TO_EXTERNAL'
+*      EXPORTING
+*      date_internal            =  ls_r-ar_date
+*      IMPORTING
+*      date_external            = lv_storageData
+*      EXCEPTIONS
+*      date_internal_is_invalid = 1
+*      OTHERS                   = 2.
+*      IF sy-subrc <> 0.
+**       Implement suitable error handling here
+*      ENDIF.
+*      ls_db-ar_date    = ls_r-ar_date.
 
     IF ls_r-error <> 0.
       ls_db-error      = ls_r-error.
@@ -636,7 +737,7 @@ FORM update_monitoring_table.
     "No CR or ID => Error
     if  ls_r-archiv_id is INITIAL or ls_r-arc_doc_id is INITIAL.
       CLEAR: ls_db-error, ls_db-error_desc.
-      ls_db-error = 1.
+      ls_db-error = 2.
       ls_db-error_desc = 'Content repository and document id are mandatory'.
       ENDIF.
 
@@ -654,12 +755,14 @@ FORM update_monitoring_table.
 *      ENDCASE.
     ENDIF.
     "Read data before updating, to avoid losing status data
-    READ TABLE lt_zotx INTO DATA(ls_zotx) WITH TABLE KEY SAP_OBJECT = ls_r-sap_object OBJECT_ID = ls_r-OBJECT_ID
-    ARCHIV_ID = ls_r-ARCHIV_ID
-    arc_doc_id = ls_r-arc_doc_id.
+*    READ TABLE lt_zotx INTO DATA(ls_zotx) WITH TABLE KEY SAP_OBJECT = ls_r-sap_object OBJECT_ID = ls_r-OBJECT_ID "Hashed table
+*                                                  ARCHIV_ID = ls_r-ARCHIV_ID arc_doc_id = ls_r-arc_doc_id.
+
+    READ TABLE gt_zotx INTO DATA(ls_zotx)
+         WITH TABLE KEY archiv_id  = ls_r-ARCHIV_ID
+                  arc_doc_id = ls_r-arc_doc_id.
 
     IF p_beform = abap_true.
-
       ls_db-zstatus_postmig = ls_zotx-zstatus_postmig.
       ls_db-zstatus_premig = ls_r-zstatus_premig.
       ls_db-migration_date  = sy-datum."To change
@@ -735,7 +838,7 @@ form display_sample .
     return.
   endif.
 
-  DATA(lv_count) = lines( lt_result ).
+  lv_count = lines( lt_result ).
 
   try.
       cl_salv_table=>factory(
