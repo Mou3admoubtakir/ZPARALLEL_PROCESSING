@@ -701,41 +701,28 @@ FORM update_monitoring_table.
     RETURN.
   ENDIF.
 
-  LOOP AT lt_result INTO DATA(ls_r).
+  LOOP AT lt_result ASSIGNING FIELD-SYMBOL(<ls_r>).
 
     CLEAR : ls_db, lv_storageData.
 
     ls_db-mandant    = sy-mandt.
-    ls_db-sap_object = ls_r-sap_object.
-    ls_db-object_id  = ls_r-object_id.
-    ls_db-archiv_id  = ls_r-archiv_id.
-    ls_db-arc_doc_id = ls_r-arc_doc_id.
-    ls_db-ztable = ls_r-ztable.
-    ls_db-AR_OBJECT = ls_r-AR_OBJECT.
-    ls_db-ar_date    = ls_r-ar_date.
-    "Date format
-*    CALL FUNCTION 'CONVERT_DATE_TO_EXTERNAL'
-*      EXPORTING
-*      date_internal            =  ls_r-ar_date
-*      IMPORTING
-*      date_external            = lv_storageData
-*      EXCEPTIONS
-*      date_internal_is_invalid = 1
-*      OTHERS                   = 2.
-*      IF sy-subrc <> 0.
-**       Implement suitable error handling here
-*      ENDIF.
-*      ls_db-ar_date    = ls_r-ar_date.
+    ls_db-sap_object = <ls_r>-sap_object.
+    ls_db-object_id  = <ls_r>-object_id.
+    ls_db-archiv_id  = <ls_r>-archiv_id.
+    ls_db-arc_doc_id = <ls_r>-arc_doc_id.
+    ls_db-ztable = <ls_r>-ztable.
+    ls_db-AR_OBJECT = <ls_r>-AR_OBJECT.
+    ls_db-ar_date    = <ls_r>-ar_date.
 
-    IF ls_r-error <> 0.
-      ls_db-error      = ls_r-error.
-      ls_db-error_desc = ls_r-error_desc.
+    IF <ls_r>-error <> 0.
+      ls_db-error      = <ls_r>-error.
+      ls_db-error_desc = <ls_r>-error_desc.
     ELSE.
       CLEAR: ls_db-error, ls_db-error_desc.
     ENDIF.
 
     "No CR or ID => Error
-    if  ls_r-archiv_id is INITIAL or ls_r-arc_doc_id is INITIAL.
+    if  <ls_r>-archiv_id is INITIAL or <ls_r>-arc_doc_id is INITIAL.
       CLEAR: ls_db-error, ls_db-error_desc.
       ls_db-error = 2.
       ls_db-error_desc = 'Content repository and document id are mandatory'.
@@ -743,7 +730,7 @@ FORM update_monitoring_table.
 
     DATA(lv_mig_status) = VALUE zmig_status( ).
 
-    IF ls_r-error <> 0.
+    IF <ls_r>-error <> 0.
       lv_mig_status = 'ERROR'.
       ls_db-error = 1.
     ELSE.
@@ -755,20 +742,20 @@ FORM update_monitoring_table.
 *      ENDCASE.
     ENDIF.
     "Read data before updating, to avoid losing status data
-*    READ TABLE lt_zotx INTO DATA(ls_zotx) WITH TABLE KEY SAP_OBJECT = ls_r-sap_object OBJECT_ID = ls_r-OBJECT_ID "Hashed table
+*    READ TABLE lt_zotx INTO DATA(<ls_zotx>) WITH TABLE KEY SAP_OBJECT = ls_r-sap_object OBJECT_ID = ls_r-OBJECT_ID "Hashed table
 *                                                  ARCHIV_ID = ls_r-ARCHIV_ID arc_doc_id = ls_r-arc_doc_id.
 
-    READ TABLE gt_zotx INTO DATA(ls_zotx)
-         WITH TABLE KEY archiv_id  = ls_r-ARCHIV_ID
-                  arc_doc_id = ls_r-arc_doc_id.
+    READ TABLE gt_zotx ASSIGNING FIELD-SYMBOL(<ls_zotx>)
+         WITH TABLE KEY archiv_id  = <ls_r>-ARCHIV_ID
+                  arc_doc_id = <ls_r>-arc_doc_id.
 
     IF p_beform = abap_true.
-      ls_db-zstatus_postmig = ls_zotx-zstatus_postmig.
-      ls_db-zstatus_premig = ls_r-zstatus_premig.
+      ls_db-zstatus_postmig = <ls_zotx>-zstatus_postmig.
+      ls_db-zstatus_premig = <ls_r>-zstatus_premig.
       ls_db-migration_date  = sy-datum."To change
     ELSEIF p_afterm = abap_true.
-      ls_db-zstatus_premig = ls_zotx-zstatus_premig.
-      ls_db-zstatus_postmig = ls_r-zstatus_postmig.
+      ls_db-zstatus_premig = <ls_zotx>-zstatus_premig.
+      ls_db-zstatus_postmig = <ls_r>-zstatus_postmig.
       ls_db-migration_date  = sy-datum."To change by the actual date of migration
     ENDIF.
 
@@ -777,7 +764,7 @@ FORM update_monitoring_table.
     "---- Batch flush
     IF lines( lt_db ) >= lv_batch.
 
-      MODIFY zotx_monitoring FROM TABLE lt_db.
+        MODIFY zotx_monitoring FROM TABLE lt_db.
 
       IF p_test = abap_true.
         ROLLBACK WORK.
