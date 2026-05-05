@@ -7,26 +7,34 @@ FUNCTION Z_PARALLEL_PROCESS_TAB.
 *"     VALUE(IP_POSTM) TYPE  CHAR1
 *"  EXPORTING
 *"     VALUE(ET_RESULT) TYPE  ZTTOTX_MONITORING
+*"     VALUE(EV_SUCCES) TYPE  I
+*"     VALUE(EV_ERROR) TYPE  I
+*"  EXCEPTIONS
+*"      PROCESSING_FAILED
 *"----------------------------------------------------------------------
+
+DATA : lv_status TYPE SAEDOKSTAT.
 DATA : lv_artime TYPE SAEABLZEIT.
 DATA : lv_rc TYPE i.
 DATA : lt_output type TABLE OF zotx_monitoring,
        ls_doc TYPE zotx_monitoring,
        ls_output TYPE zotx_monitoring,
        gv_error TYPE i,
-       gv_succes TYPE i.
+       gv_succes TYPE i,
+       lv_outputdate TYPE SAEABLDATE.
 
   clear : lt_output, ls_doc, gv_error, gv_succes.
 
-  loop at IT_MONITORING into ls_doc.
+  loop at IT_MONITORING ASSIGNING FIELD-SYMBOL(<ls_doc>). "into ls_doc.
 
-    clear ls_output.
-*    ls_output-source_tab = ls_doc-source_tab.
-    ls_output-MANDANT = ls_doc-MANDANT.
-    ls_output-sap_object = ls_doc-sap_object.
-    ls_output-object_id  = ls_doc-object_id.
-    ls_output-archiv_id    = ls_doc-archiv_id.
-    ls_output-arc_doc_id     = ls_doc-arc_doc_id.
+    clear :ls_output, lv_status.
+    ls_output-ztable = <ls_doc>-ztable.
+    ls_output-MANDANT = sy-mandt.
+    ls_output-sap_object = <ls_doc>-sap_object.
+    ls_output-object_id  = <ls_doc>-object_id.
+    ls_output-archiv_id  = <ls_doc>-archiv_id.
+    ls_output-arc_doc_id = <ls_doc>-arc_doc_id.
+    ls_output-AR_DATE    = <ls_doc>-AR_DATE.
 
 *    "Appel SCMS_HTTP_INFO
 *    call function 'SCMS_HTTP_INFO'
@@ -45,14 +53,15 @@ DATA : lt_output type TABLE OF zotx_monitoring,
 *        error_http    = 1
 *        error_rfc     = 2
 *        others        = 3.
+     IF ls_output-arc_doc_id is NOT INITIAL and ls_output-archiv_id is NOT INITIAL.
 
-     call function 'ARCHIVOBJECT_STATUS'
+       call function 'ARCHIVOBJECT_STATUS'
       exporting
         archiv_doc_id            = ls_output-arc_doc_id
         archiv_id                = ls_output-archiv_id
       importing
-        archiv_object_status     = ls_output-status
-        ar_date                  = ls_output-AR_DATE
+        archiv_object_status     = lv_status
+        ar_date                  = lv_outputdate
         ar_time                  = lv_artime
         document_type            = ls_output-AR_OBJECT
       exceptions
@@ -61,29 +70,36 @@ DATA : lt_output type TABLE OF zotx_monitoring,
         error_kernel             = 3
         others                   = 4.
 
+       else.
+         CLEAR: ls_output-error_desc.
+         ls_output-error_desc = 'Content repository and document id are mandatory'.
+     ENDIF.
+
+
     lv_rc = sy-subrc.
 
     if lv_rc <> 0.
-      ls_output-status = 'ERROR'.
+      ls_output-error = lv_rc.
+      lv_status = 'ERROR'.
       GV_ERROR = gv_error + 1.
       case lv_rc.
         when 1. ls_output-error_desc = 'SCMS_HTTP_INFO: ERROR_HTTP'.
         when 2. ls_output-error_desc = 'SCMS_HTTP_INFO: ERROR_RFC'.
         when others. ls_output-error_desc = 'SCMS_HTTP_INFO: OTHER_ERROR'.
       endcase.
+
+      ELSEIF lv_status = 'OFFLINE'.
+        GV_ERROR = gv_error + 1.
+        ls_output-error_desc = 'Document is Offline'.
       ELSE.
         GV_succes = GV_succes + 1.
+        ls_output-error = 0.
     endif.
 
-       if  ls_output-ARCHIV_ID is INITIAL or ls_output-ARCHIV_ID is INITIAL.
-      CLEAR: ls_output-error_desc.
-      ls_output-error_desc = 'Content repository and document id are mandatory'.
-      ENDIF.
-
     if ip_beform = 'X'.
-      ls_output-zstatus_premig = ls_output-status.
+      ls_output-zstatus_premig = lv_status.
       ELSEIF IP_POSTM = 'X'.
-        ls_output-zstatus_postmig = ls_output-status.
+        ls_output-zstatus_postmig = lv_status.
       ENDIF.
 
     append ls_output to lt_output.
@@ -91,6 +107,8 @@ DATA : lt_output type TABLE OF zotx_monitoring,
   endloop.
 
   ET_RESULT[] = lt_output[].
+  EV_SUCCES = GV_succes.
+  EV_ERROR = GV_ERROR.
 
 
 ENDFUNCTION.
