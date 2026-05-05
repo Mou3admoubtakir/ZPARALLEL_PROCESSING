@@ -87,7 +87,7 @@ data: lt_docs type TABLE OF ZOTX_MONITORING,
 * data:     lt_zotx TYPE HASHED TABLE OF  ZOTX_MONITORING
 *       WITH UNIQUE KEY SAP_OBJECT OBJECT_ID ARCHIV_ID ARC_DOC_ID.
  data:     gt_zotx TYPE HASHED TABLE OF  ZOTX_MONITORING
-       WITH UNIQUE KEY ARCHIV_ID ARC_DOC_ID.
+       WITH UNIQUE KEY SAP_OBJECT object_id ARCHIV_ID ARC_DOC_ID.
 
 data: lt_toa01 type tt_toa01,
       lt_toa02 type tt_toa02,
@@ -135,8 +135,15 @@ data: lt_loio_ids type tt_loio_id,
       lt_phio_ids type tt_phio_id.
 
 selection-screen begin of block b1 with frame title text-b01.
-  parameters: p_test as checkbox default 'X',
-              p_bo   type c length 10.   "Business object
+  selection-screen begin of line.
+    parameters p_test as checkbox default 'X'.
+    selection-screen comment 3(20) text-t01 for field p_test.
+
+    selection-screen position 25.
+    parameters p_alv as checkbox default space.
+    selection-screen comment 33(30) text-t02 for field p_alv.
+  selection-screen end of line.
+    parameters  p_bo   type c length 10.   "Business object
   select-options: s_sapobj for ls_toa01-SAP_OBJECT no intervals.   "SAP object ID (example)
   select-options: s_objid for ls_toa01-object_id no intervals.   "SAP object ID (example)
 selection-screen end of block b1.
@@ -155,10 +162,9 @@ selection-screen begin of block b4 with frame title text-b04.
                p_afterm radiobutton group g1.
 selection-screen end of block b4.
 
-*selection-screen begin of block b5 with frame title text-b05.
-*  parameters : p_checks radiobutton group g2 default 'X' user-command sel1,
-*               p_checkg radiobutton group g2.
-*selection-screen end of block b5.
+selection-screen begin of block b5 with frame title text-b05.
+  parameters : p_pp TYPE i DEFAULT 10.
+selection-screen end of block b5.
 
 initialization.
 
@@ -248,7 +254,12 @@ SELECT creat_date, crep, arch_docid
   PERFORM update_monitoring_table.
 
   "Display in alv
-  perform display_sample.
+  IF P_ALV = abap_true.
+    perform display_sample.
+    ELSE.
+      WRITE: / 'ALV display skipped for this execution.'.##NO_TEXT
+  ENDIF.
+
 
   get run time field lv_end.
 
@@ -257,21 +268,21 @@ SELECT creat_date, crep, arch_docid
   data(lv_seconds) = lv_diff / 1000000.
 
       WRITE: /.
-     WRITE: / '***************************************************************************************'.
-     WRITE: / '*                           Detail of the process                                     *'.
-     WRITE: / '***************************************************************************************'.
-     WRITE: /.
-    WRITE: / '***************************************************************************************'.
-    WRITE: / ' Documents to be treated  : ', lv_total.
-    WRITE: / ' Documents treated    : ', lv_count.
-    WRITE: / ' Documents with errors  : ', GV_ERROR_TOTAL.
-    WRITE: / ' Documents ok         : ', gv_succes_total.
-    WRITE: /.
-    WRITE: / '***************************************************************************************'.
-    WRITE: / '*                             End of the process                                       *'.
-    WRITE: / '***************************************************************************************'.
+     WRITE: / '***************************************************************************************'.##NO_TEXT
+     WRITE: / '*                           Detail of the process                                     *'.##NO_TEXT
+     WRITE: / '***************************************************************************************'.##NO_TEXT
+     WRITE: /.##NO_TEXT
+    WRITE: / '***************************************************************************************'.##NO_TEXT
+    WRITE: / ' Documents to be treated  : ', lv_total.##NO_TEXT
+    WRITE: / ' Documents treated    : ', lv_count.##NO_TEXT
+    WRITE: / ' Documents with errors  : ', GV_ERROR_TOTAL.##NO_TEXT
+    WRITE: / ' Documents ok         : ', gv_succes_total.##NO_TEXT
+    WRITE: /.##NO_TEXT
+    WRITE: / '***************************************************************************************'.##NO_TEXT
+    WRITE: / '*                             End of the process                                       *'.##NO_TEXT
+    WRITE: / '***************************************************************************************'.##NO_TEXT
 
-  write :/ 'Execution time (seconds): ', lv_seconds.
+  write :/ 'Execution time (seconds): ', lv_seconds.##NO_TEXT
 *&---------------------------------------------------------------------*
 *& Form gather_docs
 *&---------------------------------------------------------------------*
@@ -391,15 +402,15 @@ endform.
 *&---------------------------------------------------------------------*
 FORM deduplicate_docs.
 
-  SORT lt_docs by archiv_id arc_doc_id.
-  delete ADJACENT DUPLICATES FROM lt_docs COMPARING archiv_id arc_doc_id.
+  SORT lt_docs BY sap_object object_id archiv_id arc_doc_id. "by archiv_id arc_doc_id.
+  delete ADJACENT DUPLICATES FROM lt_docs COMPARING sap_object object_id archiv_id arc_doc_id.
 
   refresh gt_zotx.
 
   "After migration
   if lt_docs is NOT INITIAL.
 
-    SELECT archiv_id, arc_doc_id, zstatus_premig, zstatus_postmig
+    SELECT sap_object, object_id, archiv_id, arc_doc_id, zstatus_premig, zstatus_postmig
     FROM zotx_monitoring
     INTO CORRESPONDING FIELDS OF TABLE @gt_zotx
     FOR ALL ENTRIES IN @lt_docs
@@ -447,8 +458,12 @@ FORM split_docs
     RETURN.
   ENDIF.
 
-  "Variable to divide into 7 slots
-  lv_size = ( lv_total + 10 - 1 ) DIV 10.
+  IF p_pp < 1 OR p_pp > 10.
+    MESSAGE 'Number of parallel process must be between 1 and 10' TYPE 'E'.##NO_TEXT
+  ENDIF.
+  "Variable to divide into 10 slots
+*  lv_size = ( lv_total + 10 - 1 ) DIV 10.
+    lv_size = ( lv_total + p_pp - 1 ) DIV p_pp.
 
   lv_idx = 0."Counter of slots
   LOOP AT it_docs INTO DATA(ls_doc).
@@ -581,10 +596,12 @@ form start_chunk_task USING it_chunk TYPE ZTTOTX_MONITORING.
     EXPORTING
       it_monitoring     = it_chunk
       ip_beform         = p_beform
-      ip_postm          = p_afterm.
+      ip_postm          = p_afterm
+    EXCEPTIONS
+      PROCESSING_FAILED = 1
+      OTHERS = 2.
 *    TABLES
 *      it_monitoring_tab = it_chunk.
-
   IF sy-subrc = 0.
     lv_counter = lv_counter + 1.
   ENDIF.
@@ -746,15 +763,21 @@ FORM update_monitoring_table.
 *                                                  ARCHIV_ID = ls_r-ARCHIV_ID arc_doc_id = ls_r-arc_doc_id.
 
     READ TABLE gt_zotx ASSIGNING FIELD-SYMBOL(<ls_zotx>)
-         WITH TABLE KEY archiv_id  = <ls_r>-ARCHIV_ID
+         WITH TABLE KEY sap_object = <ls_r>-SAP_OBJECT object_id = <ls_r>-OBJECT_ID
+          archiv_id  = <ls_r>-ARCHIV_ID
                   arc_doc_id = <ls_r>-arc_doc_id.
 
     IF p_beform = abap_true.
-      ls_db-zstatus_postmig = <ls_zotx>-zstatus_postmig.
+      IF sy-subrc = 0.
+        ls_db-zstatus_postmig = <ls_zotx>-zstatus_postmig.
+      ENDIF.
       ls_db-zstatus_premig = <ls_r>-zstatus_premig.
       ls_db-migration_date  = sy-datum."To change
+
     ELSEIF p_afterm = abap_true.
-      ls_db-zstatus_premig = <ls_zotx>-zstatus_premig.
+      IF sy-subrc = 0.
+        ls_db-zstatus_premig = <ls_zotx>-zstatus_premig.
+      ENDIF.
       ls_db-zstatus_postmig = <ls_r>-zstatus_postmig.
       ls_db-migration_date  = sy-datum."To change by the actual date of migration
     ENDIF.
@@ -821,7 +844,7 @@ form display_sample .
 
   "Si table vide, message + exit
   if lt_result is initial.
-    write: / 'No result to display.'.
+    write: / 'No result to display.'.##NO_TEXT
     return.
   endif.
 
@@ -910,6 +933,6 @@ form display_sample .
       lo_alv->display( ).
 
     catch cx_salv_msg into data(lx_msg).
-      write: / 'ALV error:', lx_msg->get_text( ).
+      write: / 'ALV error:', lx_msg->get_text( ).##NO_TEXT
   endtry.
 endform.
